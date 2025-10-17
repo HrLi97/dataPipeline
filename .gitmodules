@@ -10,3 +10,6 @@
 [submodule "third_part/Grounded_SAM2_opt"]
 	path = third_part/Grounded_SAM2_opt
 	url = git@lhr.github.com:FasterProcess/Grounded_SAM2_opt.git
+[submodule "third_part/yolov11_tensorrt"]
+	path = third_part/yolov11_tensorrt
+	url = git@lhr.github.com:FasterProcess/yolov11_tensorrt.git
