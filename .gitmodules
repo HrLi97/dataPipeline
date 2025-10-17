@@ -4,3 +4,9 @@
 [submodule "third_part/utils_inference"]
 	path = third_part/utils_inference
 	url = git@lhr.github.com:FasterProcess/utils_inference.git
+[submodule "third_part/InitPyRepo"]
+	path = third_part/InitPyRepo
+	url = git@lhr.github.com:oneflyingfish/InitPyRepo.git
+[submodule "third_part/Grounded_SAM2_opt"]
+	path = third_part/Grounded_SAM2_opt
+	url = git@lhr.github.com:FasterProcess/Grounded_SAM2_opt.git
