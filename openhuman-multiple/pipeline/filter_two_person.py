@@ -198,38 +198,71 @@ class FaceAreaJudgeRetinaFull:
                 frames.append(bgr)
         return frames
 
-    def face_area_ratio_on_frame(self, bgr: np.ndarray) -> float:
+    def face_area_and_count_on_frame(self, bgr: np.ndarray) -> Tuple[float, int]:
         h, w = bgr.shape[:2]
         if h == 0 or w == 0:
-            return 0.0
+            return 0.0, 0
         faces = RetinaFace.detect_faces(bgr)
         boxes = _extract_face_boxes_from_retinaface(faces)
         if not boxes:
-            return 0.0
+            return 0.0, 0
         frame_area = float(h * w)
         ratios = []
-        for (x1,y1,x2,y2) in boxes:
+        for (x1, y1, x2, y2) in boxes:
             fw = max(0, x2 - x1)
             fh = max(0, y2 - y1)
-            if fw == 0 or fh == 0:
-                continue
-            ratios.append((fw * fh) / frame_area)
-        return max(ratios) if ratios else 0.0
+            if fw > 0 and fh > 0:
+                ratios.append((fw * fh) / frame_area)
+        max_ratio = max(ratios) if ratios else 0.0
+        return max_ratio, len(boxes)
 
+    # def summarize_video(self, video_path: str) -> Dict[str, float]:
+    #     cap = cv2.VideoCapture(video_path)
+    #     if not cap.isOpened():
+    #         return {"face_ratio_max": 0.0, "face_ratio_mean": 0.0, "frames_used": 0}
+    #     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    #     frames = self._sample_frames(cap, total)
+    #     ratios = [self.face_area_ratio_on_frame(bgr) for bgr in frames]
+    #     cap.release()
+    #     if not ratios:
+    #         return {"face_ratio_max": 0.0, "face_ratio_mean": 0.0, "frames_used": 0}
+    #     return {
+    #         "face_ratio_max": float(np.max(ratios)),
+    #         "face_ratio_mean": float(np.mean(ratios)),
+    #         "frames_used": len(ratios),
+    #     }
     def summarize_video(self, video_path: str) -> Dict[str, float]:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
-            return {"face_ratio_max": 0.0, "face_ratio_mean": 0.0, "frames_used": 0}
+            return {
+                "two_face_ratio": 0.0,
+                "two_face_frames": 0,
+            }
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         frames = self._sample_frames(cap, total)
-        ratios = [self.face_area_ratio_on_frame(bgr) for bgr in frames]
         cap.release()
-        if not ratios:
-            return {"face_ratio_max": 0.0, "face_ratio_mean": 0.0, "frames_used": 0}
+
+        if not frames:
+            return {
+                "two_face_ratio": 0.0,
+                "two_face_frames": 0,
+            }
+
+        ratios = []
+        counts = []
+        for bgr in frames:
+            ratio, cnt = self.face_area_and_count_on_frame(bgr)
+            ratios.append(ratio)
+            counts.append(cnt)
+
+        # 计算恰好2人的帧比例（基于所有采样帧）
+        total_frames = len(counts)
+        two_face_frames = sum(1 for c in counts if c == 2)
+        two_face_ratio = two_face_frames / total_frames if total_frames > 0 else 0.0
+
         return {
-            "face_ratio_max": float(np.max(ratios)),
-            "face_ratio_mean": float(np.mean(ratios)),
-            "frames_used": len(ratios),
+            "two_face_ratio": float(two_face_ratio),
+            "two_face_frames": int(two_face_frames),
         }
         
 import subprocess

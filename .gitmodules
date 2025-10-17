@@ -1,0 +1,6 @@
+[submodule "third_part/third_part"]
+	path = third_part/third_part
+	url = git@lhr.github.com:FasterProcess/utils_inference.git
+[submodule "third_part/utils_inference"]
+	path = third_part/utils_inference
+	url = git@lhr.github.com:FasterProcess/utils_inference.git
