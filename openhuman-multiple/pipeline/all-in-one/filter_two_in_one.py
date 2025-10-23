@@ -145,15 +145,11 @@ def load_model_pose(face_only: bool = True):
                 scores_out[0] if isinstance(scores_out, (list, tuple)) else scores_out
             )
 
-            # 如果是单人 (K,3)，转成 (1,K,3)
             if kpts.ndim == 2:
                 kpts = kpts[None, ...]
-            # 如果是单人 scores (K,), 转成 (1,K)
             if scores.ndim == 1:
                 scores = scores[None, ...]
 
-            # 只保留第一个人的 68 点 (x,y)
-            # kpts shape 现在一定是 (N, total_K, 3)
             kp68 = kpts[0, face_start : face_start + face_n, :2]  # (68,2)
             sc68 = scores[0, face_start : face_start + face_n]  # (68,)
 
@@ -164,6 +160,7 @@ def load_model_pose(face_only: bool = True):
     else:
         # 返回全身 + 脸 + 手 + 脚
         return wholebody
+
 
 def crop_video_fan_based_time(track, frames, frame_idxs):
     cropped_frames = []
@@ -227,6 +224,7 @@ def gen_audio_by_speakerID(audio_data, all_speaker_data):
 
     speaker_audio_dir = os.path.join(opt.saved_vid_root, "speaker_full_audio")
     os.makedirs(speaker_audio_dir, exist_ok=True)
+    speaker_audio_paths={}
 
     for spk_id, segments in speaker_segments.items():
         # 初始化全零音频
@@ -248,8 +246,10 @@ def gen_audio_by_speakerID(audio_data, all_speaker_data):
 
         out_path = os.path.join(speaker_audio_dir, f"{opt.reference}_speaker{spk_id}_syncnet_valid.wav")
         sf.write(out_path, full_audio, sr)
+        speaker_audio_paths[spk_id] = out_path
         print(f"Saved SyncNet-validated full-length audio for speaker {spk_id} to: {out_path}")
-        
+
+    return speaker_audio_paths  
 
     
 def extract_track_audio(audio_data, track, frame_rate, sample_rate=16000):
@@ -1041,6 +1041,9 @@ class Worker:
             BOX_THRESHOLD,
         )
 
+        print(person_bbox_dict,"person_bbox_dictperson_bbox_dictperson_bbox_dict")
+        print(bbox_mask,"bbox_maskbbox_mask")
+
         all_person_ids = set()
         for frame_data in person_bbox_dict.values():
             all_person_ids.update(frame_data.keys())
@@ -1102,12 +1105,14 @@ class Worker:
                 print(frame_idx, "frame_idxframe_idxframe_idx")
                 # 目前来说，这里是对整个人脸的bbox处理，而不是帧对应的，现在我需要让音频帧进行对应！
                 # vidtracks = crop_video_fan(opt, track, vr)
-                vidtracks = crop_video_fan_based_time(opt, track, vr, frame_idx)
+                vidtracks = crop_video_fan_based_time(track, vr, frame_idx)
                 # print(track_poses,"track_posestrack_posestrack_poses")
                 # track_audio = extract_track_audio(audio_data, [start_time, end_time], opt.frame_rate)
                 track_audio = extract_audio_by_track(audio_data, frame_idx)
-                offset, conf, dist = self.syncnet.evaluate(opt, vidtracks, track_audio)
+                offset, conf, dist = self.syncnet.evaluate(vidtracks, track_audio)
                 # 判断syncnet结果
+                print(conf, "confcconfcconfconf")
+                print(offset, "offsetoffsetoffsetoffset")
                 if (
                     opt.min_offset <= offset <= opt.max_offset
                     and conf >= opt.min_confidence
@@ -1137,10 +1142,48 @@ class Worker:
                 
         if valid:
             # 保存说话人音频片段
-            gen_audio_by_speakerID(audio_data=audio_data,all_speaker_data=all_speaker_data)
+            speaker_audio_paths=gen_audio_by_speakerID(audio_data=audio_data,all_speaker_data=all_speaker_data)
             
             #按照speaker_id 分组 all_speaker_data 
+            speaker_entries = defaultdict(list)
+            for entry in all_speaker_data:
+                speaker_entries[entry["speaker_id"]].append(entry)
+            jdir = os.path.join(opt.saved_vid_root, "jsonl")
+            os.makedirs(jdir, exist_ok=True)
+            mask_j = os.path.join(jdir, f"{opt.reference}_mask.jsonl")
+            pose_j = os.path.join(jdir, f"{opt.reference}_landmarks.jsonl")
             
+            total_frames = len(vr)
+            fps = getattr(opt, "frame_rate", vr.get_avg_fps())
+            speaker_output_paths = {}
+            
+            for spk_id, entries in speaker_entries.items():
+                # 聚合该 speaker 的 mask 和 pose
+                mask_per_frame = {}
+                pose_per_frame = {}
+                
+                for rec in entries:
+                    for f, r in rec["mask"].items():
+                        cnt = r["counts"]
+                        if isinstance(cnt, (bytes, bytearray)):
+                            cnt = cnt.decode("utf-8")
+                        mask_per_frame[f] = {"size": r["size"], "counts": cnt}
+                    for f, pts in rec["poses"].items():
+                        pose_per_frame[f] = pts
+                
+                mask_j = os.path.join(jdir, f"{opt.reference}_mask_speaker_{spk_id}.jsonl")
+                pose_j = os.path.join(jdir, f"{opt.reference}_landmarks_speaker_{spk_id}.jsonl")  
+
+                with open(mask_j, "w", encoding="utf-8") as mf, open(pose_j, "w", encoding="utf-8") as pf:
+                    for f in range(total_frames):
+                        mf.write(f"{f}:" + json.dumps(mask_per_frame.get(f), ensure_ascii=False) + "\n")
+                        pf.write(f"{f}:" + json.dumps(pose_per_frame.get(f), ensure_ascii=False) + "\n")
+
+                speaker_output_paths[spk_id] = {
+                    "mask_jsonl": mask_j,
+                    "pose_jsonl": pose_j
+                }
+        
             vis_dir = os.path.join(opt.saved_vid_root, "visualization")
             os.makedirs(vis_dir, exist_ok=True)
             vis_path = os.path.join(vis_dir, f"{opt.reference}_vis.mp4")
@@ -1155,71 +1198,40 @@ class Worker:
             # visualize_tracks_with_audio(vr,person_bbox_dict,all_speaker_data,vis_path,fps,video_path)
             print(f"Visualization saved to {vis_path}")
 
-            jdir = os.path.join(opt.saved_vid_root, "jsonl")
-            os.makedirs(jdir, exist_ok=True)
-            mask_j = os.path.join(jdir, f"{opt.reference}_mask.jsonl")
-            pose_j = os.path.join(jdir, f"{opt.reference}_landmarks.jsonl")
-            # 总帧数
-            total_frames = len(vr)
-            # 聚合所有 speakers 的 mask 和 pose 到每帧字典
-            mask_per_frame = {}
-            pose_per_frame = {}
-            for rec in all_speaker_data:
-                for f, r in rec["mask"].items():
-                    # 清洗 RLE counts
-                    cnt = r["counts"]
-                    if isinstance(cnt, (bytes, bytearray)):
-                        cnt = cnt.decode("utf-8")
-                    mask_per_frame[f] = {"size": r["size"], "counts": cnt}
-                for f, pts in rec["poses"].items():
-                    pose_per_frame[f] = pts
-            # 写入 JSONL，每帧一行
-            with open(mask_j, "w", encoding="utf-8") as mf, open(
-                pose_j, "w", encoding="utf-8"
-            ) as pf:
-                for f in range(total_frames):
-                    mf.write(
-                        f"{f}:"
-                        + json.dumps(mask_per_frame.get(f), ensure_ascii=False)
-                        + "\n"
-                    )
-                    pf.write(
-                        f"{f}:"
-                        + json.dumps(pose_per_frame.get(f), ensure_ascii=False)
-                        + "\n"
-                    )
-            print(f"Masks saved to {mask_j}, poses to {pose_j}")
-
+            # 汇总
             with open(opt.output_csv_path, "a", newline="") as f:
                 writer = csv.writer(f)
                 if f.tell() == 0:
                     writer.writerow(
                         [
                             "audio_path",
+                            "speaker_id",
                             "total_frames",
                             "mask_jsonl",
                             "pose_jsonl",
+                            "speaker_audio_paths",
                             "video_path",
                             "visualize_tracks",
                         ]
                     )
                 writer.writerow(
-                    [audio_path, total_frames, mask_j, pose_j, video_path, vis_path]
+                    [audio_path, spk_id, total_frames, mask_j, pose_j, speaker_audio_paths, video_path, vis_path]
                 )
             print(f"Results written to {opt.output_csv_path}")
 
         else:
-            os.remove(audio_path)
-            failed_dir = os.path.join(
-                opt.saved_vid_root, "failed_videos_tvshow_batch-1"
-            )
-            os.makedirs(failed_dir, exist_ok=True)
-            dest_path = os.path.join(failed_dir, os.path.basename(video_path))
-            try:
-                shutil.move(video_path, dest_path)
-                print(f"Video moved to failed dir: {dest_path}")
-            except Exception as e:
-                print(f"Failed to move video {video_path} to {failed_dir}: {e}")
+            print("$$$$$$$$$$$$$$$$$$$$ No valid speaking segments found, skipping result saving.$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
+            # os.remove(audio_path)
+            # failed_dir = os.path.join(
+            #     opt.saved_vid_root, "failed_videos_tvshow_batch-1"
+            # )
+            # os.makedirs(failed_dir, exist_ok=True)
+            # dest_path = os.path.join(failed_dir, os.path.basename(video_path))
+            # try:
+            #     shutil.move(video_path, dest_path)
+            #     print(f"Video moved to failed dir: {dest_path}")
+            # except Exception as e:
+            #     print(f"Failed to move video {video_path} to {failed_dir}: {e}")
 
     def __call__(self, item):
         if opt.is_local:
