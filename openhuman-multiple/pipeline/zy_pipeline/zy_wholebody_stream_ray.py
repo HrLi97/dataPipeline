@@ -7,6 +7,7 @@ import mmcv
 import jsonlines
 import cv2
 import ffmpeg
+sys.path.append('/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/openhuman-multiple/utils')
 from local_rtmlib import Wholebody, draw_skeleton, PoseTracker
 import numpy as np
 import ray
@@ -15,10 +16,10 @@ import pandas as pd
 import torch
 
 parser = argparse.ArgumentParser(description='分离GPU推理与CPU可视化的姿态估计流水线')
-parser.add_argument("--save_path", default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/zy_lmks/openhunman-1/",help="可视化结果保存路径")
-parser.add_argument("--keypoint_path", default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/zy_lmks/openhunman-1/",help="关键点数据保存路径")
+parser.add_argument("--save_path", default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/zy_lmks/openhunman-1/part2/",help="可视化结果保存路径")
+parser.add_argument("--keypoint_path", default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/zy_lmks/openhunman-1/part2/",help="关键点数据保存路径")
 parser.add_argument('--model_arch', default='wholebody', help="模型架构名称")
-parser.add_argument('--csv_path', default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/annotation_data/0919_openhuman_one_human_all_25fps_part_1_final.csv",help="包含视频路径的CSV文件")
+parser.add_argument('--csv_path', default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/fps/open_part/0919_openhuman_one_human_all_25fps_part_2.csv",help="包含视频路径的CSV文件")
 opt = parser.parse_args()
 
 def read_vid_paths(csv_file):
@@ -251,7 +252,20 @@ if __name__ == "__main__":
     # 流式处理：GPU推理 -> 过滤无效结果 -> CPU可视化（流水线执行）
     print("===== 开始流式处理（边推理边可视化） =====")
 
-    ray.init()
+    # ray.init()
+    ray.init(
+            address="auto",
+            runtime_env={
+                "env_vars": {
+                    "PYTHONPATH": ":".join([
+                        "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/openhuman-multiple/utils",
+                    ]),
+                    "HF_ENDPOINT": "https://hf-mirror.com",
+                    "DEEPFACE_HOME": "/home/ubuntu/MyFiles/haoran/cpk/",
+                }
+            }
+        )
+    
     samples = ray.data.read_csv(opt.csv_path)
     print("samples.count",samples.count())
 
@@ -270,20 +284,15 @@ if __name__ == "__main__":
         InferencePredictor,
         num_gpus = 1,
         batch_size=1,
-        concurrency=4,
+        concurrency=3,
     )
 
     predictions = predictions.map_batches(
         batch_visualization,
         num_cpus=1,
         batch_size=1,
-        concurrency=30,
+        concurrency=20,
     )
-    '''
-    CPU 车间：有 1 条生产线（concurrency=1），每条线需要 2 个工人（num_cpus=2），一次加工 1 个视频（batch_size=1）。  即同一时间，只有 1 个视频在做预处理
-    GPU 车间：有 3 条生产线（concurrency=3），每条线需要 4 个工人（num_gpus=4），一次加工 1 个视频（batch_size=1）。  即同一时间，有 3 个视频在做推理）
-    流程：CPU 车间加工好 1 个视频，立刻送到 GPU 车间的空闲生产线；CPU 继续加工下一个，GPU 同时处理已收到的，形成 “流水作业”。
-    '''
     write_csv_path = "/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/zy_lmks/ray_log/openhuman-1/"   
     predictions.write_csv(write_csv_path, min_rows_per_file=1)
 

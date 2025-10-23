@@ -26,6 +26,7 @@ import ffmpeg
 import soundfile as sf
 from decord import VideoReader, cpu
 import shlex
+from collections import defaultdict
 
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 sys.path.insert(0, "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/mmpose-main")
@@ -164,6 +165,105 @@ def load_model_pose(face_only: bool = True):
         # 返回全身 + 脸 + 手 + 脚
         return wholebody
 
+def crop_video_fan_based_time(track, frames, frame_idxs):
+    cropped_frames = []
+
+    for frame_idx, bbox in track:
+        if frame_idx not in frame_idxs:
+            continue
+        if frame_idx < 0 or frame_idx >= len(frames):
+            continue
+
+        frame = frames[frame_idx]
+        cs = 0.40
+        bs = max((bbox[3] - bbox[1]), (bbox[2] - bbox[0])) / 2
+        bsi = int(bs * (1 + 2 * cs))
+
+        padded = np.pad(frame, ((bsi, bsi), (bsi, bsi), (0, 0)),
+                        'constant', constant_values=110)
+
+        my = (bbox[1] + bbox[3]) / 2 + bsi
+        mx = (bbox[0] + bbox[2]) / 2 + bsi
+        face = padded[
+            int(my - bs):int(my + bs * (1 + 2 * cs)),
+            int(mx - bs * (1 + cs)):int(mx + bs * (1 + cs))
+        ]
+
+        if face.size == 0:
+            print(f"Warning: Empty crop for frame {frame_idx}, skipping.")
+            continue
+        try:
+            face_resized = cv2.resize(face, (224, 224))
+        except Exception as e:
+            print(f"Error resizing frame {frame_idx}: {e}")
+            continue
+
+        cropped_frames.append(face_resized)
+
+    return np.array(cropped_frames)
+
+def extract_audio_by_track(audio_data,frame_idx,fps=25,sample_rate=16000):
+    snippets = []
+    for fidx in frame_idx:
+        t0 = fidx / fps
+        t1 = (fidx + 1) / fps
+        s0 = int(round(t0 * sample_rate))
+        s1 = int(round(t1 * sample_rate))
+        snippets.append(audio_data[s0:s1])
+    if snippets:
+        return np.concatenate(snippets)
+    else:
+        return np.zeros(0, dtype=audio_data.dtype)
+
+def gen_audio_by_speakerID(audio_data, all_speaker_data):
+    speaker_segments = defaultdict(list)
+    for entry in all_speaker_data:
+        speaker_segments[entry["speaker_id"]].append((entry["start_time"], entry["end_time"]))
+
+    # 获取音频参数
+    sr = getattr(opt, 'audio_sample_rate', 16000)
+    total_samples = len(audio_data)
+    is_stereo = (audio_data.ndim == 2)
+
+    speaker_audio_dir = os.path.join(opt.saved_vid_root, "speaker_full_audio")
+    os.makedirs(speaker_audio_dir, exist_ok=True)
+
+    for spk_id, segments in speaker_segments.items():
+        # 初始化全零音频
+        if is_stereo:
+            full_audio = np.zeros_like(audio_data)
+        else:
+            full_audio = np.zeros(total_samples, dtype=audio_data.dtype)
+
+        for start_t, end_t in segments:
+            s = int(round(start_t * sr))
+            e = int(round(end_t * sr))
+            s = max(0, s)
+            e = min(total_samples, e)
+            if s < e:
+                if is_stereo:
+                    full_audio[s:e, :] = audio_data[s:e, :]
+                else:
+                    full_audio[s:e] = audio_data[s:e]
+
+        out_path = os.path.join(speaker_audio_dir, f"{opt.reference}_speaker{spk_id}_syncnet_valid.wav")
+        sf.write(out_path, full_audio, sr)
+        print(f"Saved SyncNet-validated full-length audio for speaker {spk_id} to: {out_path}")
+        
+
+    
+def extract_track_audio(audio_data, track, frame_rate, sample_rate=16000):
+    audiostart = track[0]  # 获取音频段的起始时间（以秒为单位）
+    audioend = track[-1]  # 获取音频段的结束时间（以秒为单位）
+    
+    # 转换为样本索引
+    start_sample = int(audiostart * sample_rate)
+    end_sample = int(audioend * sample_rate)
+    
+    # 从音频数据中提取相应的音频片段
+    selected_audio = audio_data[start_sample:end_sample]
+    
+    return selected_audio
 
 def read_video_with_decord(video_path, use_gpu=False):
     try:
@@ -444,6 +544,39 @@ def process_item_person_2(
 
     return bbox_dict, mask_dict, video_segments, OBJECTS
 
+def save_audio_segment(
+    audio_data,
+    all_speaker_data):
+    
+    audio_dir = os.path.join(opt.saved_vid_root, "audio_segments")
+    os.makedirs(audio_dir, exist_ok=True)
+
+    for idx, entry in enumerate(all_speaker_data):
+        start_t = entry["start_time"]
+        end_t = entry["end_time"]
+        speaker_id = entry["speaker_id"]
+        pid = entry["pid"]
+
+        sr = 16000
+        start_sample = int(start_t * sr)
+        end_sample = int(end_t * sr)
+        
+        # 边界保护
+        start_sample = max(0, start_sample)
+        end_sample = min(len(audio_data), end_sample)
+
+        segment_audio = audio_data[start_sample:end_sample]
+
+        # 保存为 WAV 文件
+        audio_out_path = os.path.join(
+            audio_dir,
+            f"{opt.reference}_speaker{speaker_id}_pid{pid}_seg{idx}.wav"
+        )
+        sf.write(audio_out_path, segment_audio, sr)
+        print(f"Saved audio segment to {audio_out_path}")
+        # 可选：将音频路径也写入 best_entry 或 CSV
+        entry["audio_segment_path"] = audio_out_path
+        
 
 def visualize(
     vid_path,
@@ -925,6 +1058,8 @@ class Worker:
         audio_path = file_name
         audio_data, sample_rate = librosa.load(audio_path, sr=16000)
         process_audio = process_audio_files(audio_path, pipeline)
+        
+        print(process_audio,"process_audioprocess_audioprocess_audioprocess_audio")
 
         time_speaker = process_audio["time_speaker"]
         all_speaker_data = []
@@ -999,8 +1134,13 @@ class Worker:
             if masks_in_range:
                 valid = True
                 all_speaker_data.append(best_entry)
-
+                
         if valid:
+            # 保存说话人音频片段
+            gen_audio_by_speakerID(audio_data=audio_data,all_speaker_data=all_speaker_data)
+            
+            #按照speaker_id 分组 all_speaker_data 
+            
             vis_dir = os.path.join(opt.saved_vid_root, "visualization")
             os.makedirs(vis_dir, exist_ok=True)
             vis_path = os.path.join(vis_dir, f"{opt.reference}_vis.mp4")
