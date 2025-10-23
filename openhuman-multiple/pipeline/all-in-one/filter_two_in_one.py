@@ -38,29 +38,14 @@ sys.path.insert(0, "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/syncnet_python-
 # sys.path.insert(0, "/home/ubuntu/Grounded-SAM-2/grounding_dino")
 
 sys.path.append("/mnt/cfs/shanhai/lihaoran/Data_process/a6000")
+sys.path.append("/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/")
+sys.path.append("/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/grounding_dino/")
+sys.path.append("/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/sam2_opt/sam2")
 
-from Data_process_talking.utils.detect_body import *
-from yolov91.yolov9.models.common import DetectMultiBackend
-from yolov91.yolov9.utils1.plots import Annotator, colors, save_one_box
-from yolov91.yolov9.utils1.torch_utils import select_device, smart_inference_mode
-from yolov91.yolov9.utils1.general import (
-    LOGGER,
-    Profile,
-    check_file,
-    check_img_size,
-    check_imshow,
-    check_requirements,
-    colorstr,
-    cv2,
-    increment_path,
-    non_max_suppression,
-    print_args,
-    scale_boxes,
-    strip_optimizer,
-    xyxy2xywh,
-)
+
+from utils.detect_body import *
 from process_for_tvshow.pipeline.utils import *
-from ProcessVideo_ray import *
+# from ProcessVideo_ray import *
 from scipy.io import wavfile
 from SyncNetInstance import *
 from detectors import S3FD
@@ -73,7 +58,6 @@ from groundingdino.util.inference import load_model, load_image, predict
 import groundingdino.datasets.transforms as T
 import torchvision.transforms as T1
 
-# from utils.detect_body import *
 GROUNDING_DINO_CONFIG = "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/grounding_dino/groundingdino/config/GroundingDINO_SwinT_OGC.py"
 GROUNDING_DINO_CHECKPOINT = "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/ckps/groundingdino_swint_ogc.pth"
 BOX_THRESHOLD_HAND = 0.35
@@ -338,7 +322,6 @@ def process_audio_files(wav_paths, pipeline):
 
 
 def process_item_person_2(
-    model_yolo,
     vid_path,
     vr,
     saved_vid_root,
@@ -362,18 +345,14 @@ def process_item_person_2(
     valid_two_person = True
     for frame_idx in range(0, len(vr), 5):
         frame_np = vr[frame_idx].numpy()
-        if tag.lower() == "face":
-            boxes, confs, labels = predict(
-                model=grounding_model,
-                image=load_image(frame_np),
-                caption=TEXT_PROMPT,
-                box_threshold=BOX_THRESHOLD_1,
-                text_threshold=TEXT_THRESHOLD,
-            )
-            person_num = max(person_num, len(boxes))
-        else:
-            dets = extract_bbox_yolo_1(frame_np, model_yolo, frame_idx, False, "12.17")
-            person_num = sum(1 for d in dets if d["class_name"] == tag)
+        boxes, confs, labels = predict(
+            model=grounding_model,
+            image=load_image(frame_np),
+            caption=TEXT_PROMPT,
+            box_threshold=BOX_THRESHOLD_1,
+            text_threshold=TEXT_THRESHOLD,
+        )
+        person_num = max(person_num, len(boxes))
 
         if person_num != 2:
             valid_two_person = False
@@ -701,41 +680,22 @@ class Worker:
         2. 使用gounded-sam2检测嘴部mask,得到一个个小视频,使用syncnet分别计算得到参数,置信度过低计算帧之间mask的面积变化
         3. 保存结果,即筛选音画不同步,多人的场景可以,但是只能一个人说话,需要说话人的mask
         """
-
-        import sys
-
-        sys.path.insert(0, "/home/ubuntu/Grounded-SAM-2")
-        sys.path.insert(0, "/home/ubuntu/MyFiles/haoran/code/")
-        sys.path.insert(0, "/home/ubuntu/MyFiles/haoran/code/Data_process_talking")
-        sys.path.insert(
-            0, "/home/ubuntu/MyFiles/haoran/code/Data_process_talking/mmpose-main"
-        )
-        # sys.path.insert(0, "/home/ubuntu/MyFiles/haoran/code/Data_process_talking/utils")
-        sys.path.insert(0, "/home/ubuntu/Grounded-SAM-2/grounding_dino")
-        sys.path.insert(
-            0, "/home/ubuntu/MyFiles/haoran/code/Music-Source-Separation-Training"
-        )
-        sys.path.insert(0, "/home/ubuntu/MyFiles/haoran/code/syncnet_python-master")
-
         self.grounding_model = load_model(
             model_config_path=GROUNDING_DINO_CONFIG,
             model_checkpoint_path=GROUNDING_DINO_CHECKPOINT,
             device="cuda",
-        )
-        model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
-        sam2_checkpoint = "/home/ubuntu/MyFiles/haoran/code/Data_process_talking/samurai/sam2/checkpoints/sam2.1_hiera_large.pt"
-
-        self.model_yolo = YOLO11_ONNX(
-            "/home/ubuntu/MyFiles/haoran/code/Data_process_talking/ultralytics/yolo11n.onnx"
-        )
+        )   
+        # model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
+        model_cfg = "sam2.1_hiera_l.yaml"
+        sam2_checkpoint = "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/checkpoints/sam2.1_hiera_large.pt"
 
         self.video_predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint)
         sam2_image_model = build_sam2(model_cfg, sam2_checkpoint)
         self.image_predictor = SAM2ImagePredictor(sam2_image_model)
 
         model_type = "mel_band_roformer"
-        config_path = "/home/ubuntu/MyFiles/haoran/code/Music-Source-Separation-Training/ckpts/config_vocals_mel_band_roformer_kj.yaml"
-        start_check_point = "/home/ubuntu/MyFiles/haoran/code/Music-Source-Separation-Training/ckpts/MelBandRoformer.ckpt"
+        config_path = "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/Music-Source-Separation-Training/ckpts/config_vocals_mel_band_roformer_kj.yaml"
+        start_check_point = "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/Music-Source-Separation-Training/ckpts/MelBandRoformer.ckpt"
         device = "cuda"
 
         model, config = get_model_from_config(model_type, config_path)
@@ -793,11 +753,18 @@ class Worker:
 
         return final_files
 
-    def save_results(self, data, output_dir):
-        path = data["vid_path"]
-        parent_folder = os.path.basename(os.path.dirname(path))
-        file_name = os.path.splitext(os.path.basename(path))[0]
-        save_folder = os.path.join(output_dir, parent_folder)
+    def save_results(self, data, output_dir, depth=2):
+        vid_path = data["vid_path"]
+        file_name = os.path.splitext(os.path.basename(vid_path))[0]
+        # path - /mnt/cfs/shanhai/lihaoran/data/OpenHumanVid-final/part_003/33/32/3332623f3da02201ffa02a7eba1e643d
+        parts = Path(vid_path).parent.parts
+        if len(parts) <= 1:
+            rel_subdir = ""
+        else:
+            clean_parts = [p for p in parts if p] 
+            rel_subdir = os.path.join(*clean_parts[-depth:]) if clean_parts else ""
+
+        save_folder = os.path.join(output_dir, rel_subdir)
         os.makedirs(save_folder, exist_ok=True)
 
         results = []
@@ -818,18 +785,14 @@ class Worker:
     def first_step(self, vid_path):
         separation_data = run_one(vid_path, self.model, opt, self.config, self.device)
         # final_files = self.save_and_enhance_results(separation_data, opt.store_dir)
-        saved_files = self.save_results(separation_data, opt.store_dir)
+        saved_files = self.save_results(separation_data, opt.store_dir,depth=2)
         print(saved_files, "saved_filessaved_filessaved_files")
         for sep_file in saved_files:
             output_wav, file_name = SE(sep_file, self.myClearVoice)
         return output_wav, file_name
 
     def detect_mouth_keypoint(self, vidtracks, ii):
-        from mmpose.apis import inference_topdown
         from mmpose.apis import init_model as init_pose_estimator
-        from mmpose.evaluation.functional import nms
-        from mmpose.registry import VISUALIZERS
-        from mmpose.structures import merge_data_samples, split_instances
         from mmpose.utils import adapt_mmdet_pipeline
 
         detector = init_detector(opt.det_config, opt.det_checkpoint, device="cuda:0")
@@ -861,10 +824,10 @@ class Worker:
             frame_vis = draw_keypoints(
                 frame.copy(), keypoints, pred_instances["keypoint_scores"], kp_thr=0.5
             )
-            mmcv.imwrite(
-                frame_vis,
-                f"/home/ubuntu/MyFiles/haoran/code/Data_process_talking/process_for_tvshow/img/111_frame_{frame_idx}_{ii}_valid.png",
-            )
+            # mmcv.imwrite(
+            #     frame_vis,
+            #     f"/home/ubuntu/MyFiles/haoran/code/Data_process_talking/process_for_tvshow/img/111_frame_{frame_idx}_{ii}_valid.png",
+            # )
 
             mouth_opening, mouth_movement, current_mouth_position = (
                 calculate_mouth_movement(keypoints, prev_mouth_position)
@@ -908,7 +871,6 @@ class Worker:
                 return None
 
         return mouth_movements
-
     """
     1. 加载视频 → 2. 人脸检测与跟踪（SAM2） → 3. 音频说话人分割 →
     4. 遍历每个说话人片段 → 5. 遍历所有人脸 track →
@@ -916,7 +878,6 @@ class Worker:
     8. 选置信度最高的 track 作为该说话人 →
     9. 输出 mask/pose/可视化/CSV
     """
-
     def second_step(
         self,
         video_path,
@@ -926,7 +887,6 @@ class Worker:
         grounding_model,
         image_predictor,
         video_predictor,
-        model_yolo,
         pipeline,
         pose_model,
     ):
@@ -938,7 +898,6 @@ class Worker:
         valid = False
         # 调用sam2来检测人脸，返回我所有的person - frame - bbox
         person_bbox_dict, bbox_mask, video_segments, OBJECTS = process_item_person_2(
-            model_yolo,
             video_path,
             vr,
             opt.saved_vid_root + "/person",
@@ -1124,30 +1083,29 @@ class Worker:
 
     def __call__(self, item):
         if opt.is_local:
-            vid_path = item["file_path"]
+            vid_path = item["path"]
         else:
-            vid_path = item["file_path"][0]
+            vid_path = item["path"][0]
 
-        try:
-            output_wav, file_name = self.first_step(vid_path)
-            print(output_wav, "output_wavoutput_wavoutput_wav")
-            self.second_step(
-                vid_path,
-                output_wav,
-                file_name,
-                opt,
-                self.grounding_model,
-                self.image_predictor,
-                self.video_predictor,
-                self.model_yolo,
-                self.pipeline,
-                self.pose_model,
-            )
-            item["status"] = [1]
-        except Exception as e:
-            print(f"!!!!!!!!! Error process {vid_path}")
-            print("Reason:", e)
-            item["status"] = [0]
+        # try:
+        output_wav, file_name = self.first_step(vid_path)
+        print(output_wav, "output_wavoutput_wavoutput_wav")
+        self.second_step(
+            vid_path,
+            output_wav,
+            file_name,
+            opt,
+            self.grounding_model,
+            self.image_predictor,
+            self.video_predictor,
+            self.pipeline,
+            self.pose_model,
+        )
+        item["status"] = [1]
+        # except Exception as e:
+        #     print(f"!!!!!!!!! Error process {vid_path}")
+        #     print("Reason:", e)
+        #     item["status"] = [0]
         return item
 
 
@@ -1218,7 +1176,7 @@ parser.add_argument(
 parser.add_argument("--max_offset", type=int, default=6, help="Max Video-Audio offset")
 parser.add_argument("--min_offset", type=int, default=-6, help="Min Video-Audio offset")
 parser.add_argument(
-    "--min_confidence", type=int, default=1.0, help="Minimum confidence value"
+    "--min_confidence", type=int, default=1, help="Minimum confidence value"
 )
 opt = parser.parse_args()
 
@@ -1255,11 +1213,12 @@ if __name__ == "__main__":
                             "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/mmpose-main",
                             "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/Music-Source-Separation-Training",
                             "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/syncnet_python-master",
-                            
-                            "/home/ubuntu/Grounded-SAM-2",
-                            "/home/ubuntu/Grounded-SAM-2/grounding_dino",
-                            "/home/ubuntu/MyFiles/haoran/code",
-                            "/home/ubuntu/MyFiles/haoran/code/Data_process_talking",
+                            "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt",
+                            "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/sam2_opt"
+                            # "/home/ubuntu/Grounded-SAM-2",
+                            # "/home/ubuntu/Grounded-SAM-2/grounding_dino",
+                            # "/home/ubuntu/MyFiles/haoran/code",
+                            # "/home/ubuntu/MyFiles/haoran/code/Data_process_talking",
                         ]
                     ),
                     "HF_ENDPOINT": "https://hf-mirror.com",
