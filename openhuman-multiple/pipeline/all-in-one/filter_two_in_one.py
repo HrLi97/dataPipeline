@@ -30,7 +30,9 @@ from collections import defaultdict
 
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 sys.path.insert(0, "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/mmpose-main")
-sys.path.insert(0, "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/Music-Source-Separation-Training")
+sys.path.insert(
+    0, "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/Music-Source-Separation-Training"
+)
 sys.path.insert(0, "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/syncnet_python-master")
 
 # sys.path.insert(0, "/home/ubuntu/Grounded-SAM-2")
@@ -39,13 +41,20 @@ sys.path.insert(0, "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/syncnet_python-
 # sys.path.insert(0, "/home/ubuntu/Grounded-SAM-2/grounding_dino")
 
 sys.path.append("/mnt/cfs/shanhai/lihaoran/Data_process/a6000")
-sys.path.append("/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/")
-sys.path.append("/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/grounding_dino/")
-sys.path.append("/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/sam2_opt/sam2")
+sys.path.append(
+    "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/"
+)
+sys.path.append(
+    "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/grounding_dino/"
+)
+sys.path.append(
+    "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/sam2_opt/sam2"
+)
 
 
 from utils.detect_body import *
 from process_for_tvshow.pipeline.utils import *
+
 # from ProcessVideo_ray import *
 from scipy.io import wavfile
 from SyncNetInstance import *
@@ -60,7 +69,9 @@ import groundingdino.datasets.transforms as T
 import torchvision.transforms as T1
 
 GROUNDING_DINO_CONFIG = "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/grounding_dino/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-GROUNDING_DINO_CHECKPOINT = "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/ckps/groundingdino_swint_ogc.pth"
+GROUNDING_DINO_CHECKPOINT = (
+    "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/ckps/groundingdino_swint_ogc.pth"
+)
 BOX_THRESHOLD_HAND = 0.35
 BOX_THRESHOLD = 0.45
 TEXT_THRESHOLD = 0.4
@@ -124,6 +135,7 @@ def load_image(image_rgb) -> Tuple[np.array, torch.Tensor]:
     image_transformed, _ = transform(image_source, None)
     return image_transformed
 
+
 def load_model_pose(face_only: bool = True):
     device = "cuda"
     backend = "onnxruntime"
@@ -176,14 +188,15 @@ def crop_video_fan_based_time(track, frames, frame_idxs):
         bs = max((bbox[3] - bbox[1]), (bbox[2] - bbox[0])) / 2
         bsi = int(bs * (1 + 2 * cs))
 
-        padded = np.pad(frame, ((bsi, bsi), (bsi, bsi), (0, 0)),
-                        'constant', constant_values=110)
+        padded = np.pad(
+            frame, ((bsi, bsi), (bsi, bsi), (0, 0)), "constant", constant_values=110
+        )
 
         my = (bbox[1] + bbox[3]) / 2 + bsi
         mx = (bbox[0] + bbox[2]) / 2 + bsi
         face = padded[
-            int(my - bs):int(my + bs * (1 + 2 * cs)),
-            int(mx - bs * (1 + cs)):int(mx + bs * (1 + cs))
+            int(my - bs) : int(my + bs * (1 + 2 * cs)),
+            int(mx - bs * (1 + cs)) : int(mx + bs * (1 + cs)),
         ]
 
         if face.size == 0:
@@ -199,7 +212,8 @@ def crop_video_fan_based_time(track, frames, frame_idxs):
 
     return np.array(cropped_frames)
 
-def extract_audio_by_track(audio_data,frame_idx,fps=25,sample_rate=16000):
+
+def extract_audio_by_track(audio_data, frame_idx, fps=25, sample_rate=16000):
     snippets = []
     for fidx in frame_idx:
         t0 = fidx / fps
@@ -212,19 +226,22 @@ def extract_audio_by_track(audio_data,frame_idx,fps=25,sample_rate=16000):
     else:
         return np.zeros(0, dtype=audio_data.dtype)
 
+
 def gen_audio_by_speakerID(audio_data, all_speaker_data):
     speaker_segments = defaultdict(list)
     for entry in all_speaker_data:
-        speaker_segments[entry["speaker_id"]].append((entry["start_time"], entry["end_time"]))
+        speaker_segments[entry["speaker_id"]].append(
+            (entry["start_time"], entry["end_time"])
+        )
 
     # 获取音频参数
-    sr = getattr(opt, 'audio_sample_rate', 16000)
+    sr = getattr(opt, "audio_sample_rate", 16000)
     total_samples = len(audio_data)
-    is_stereo = (audio_data.ndim == 2)
+    is_stereo = audio_data.ndim == 2
 
     speaker_audio_dir = os.path.join(opt.saved_vid_root, "speaker_full_audio")
     os.makedirs(speaker_audio_dir, exist_ok=True)
-    speaker_audio_paths={}
+    speaker_audio_paths = {}
 
     for spk_id, segments in speaker_segments.items():
         # 初始化全零音频
@@ -244,26 +261,31 @@ def gen_audio_by_speakerID(audio_data, all_speaker_data):
                 else:
                     full_audio[s:e] = audio_data[s:e]
 
-        out_path = os.path.join(speaker_audio_dir, f"{opt.reference}_speaker{spk_id}_syncnet_valid.wav")
+        out_path = os.path.join(
+            speaker_audio_dir, f"{opt.reference}_speaker{spk_id}_syncnet_valid.wav"
+        )
         sf.write(out_path, full_audio, sr)
         speaker_audio_paths[spk_id] = out_path
-        print(f"Saved SyncNet-validated full-length audio for speaker {spk_id} to: {out_path}")
+        print(
+            f"Saved SyncNet-validated full-length audio for speaker {spk_id} to: {out_path}"
+        )
 
-    return speaker_audio_paths  
+    return speaker_audio_paths
 
-    
+
 def extract_track_audio(audio_data, track, frame_rate, sample_rate=16000):
     audiostart = track[0]  # 获取音频段的起始时间（以秒为单位）
     audioend = track[-1]  # 获取音频段的结束时间（以秒为单位）
-    
+
     # 转换为样本索引
     start_sample = int(audiostart * sample_rate)
     end_sample = int(audioend * sample_rate)
-    
+
     # 从音频数据中提取相应的音频片段
     selected_audio = audio_data[start_sample:end_sample]
-    
+
     return selected_audio
+
 
 def read_video_with_decord(video_path, use_gpu=False):
     try:
@@ -544,10 +566,9 @@ def process_item_person_2(
 
     return bbox_dict, mask_dict, video_segments, OBJECTS
 
-def save_audio_segment(
-    audio_data,
-    all_speaker_data):
-    
+
+def save_audio_segment(audio_data, all_speaker_data):
+
     audio_dir = os.path.join(opt.saved_vid_root, "audio_segments")
     os.makedirs(audio_dir, exist_ok=True)
 
@@ -560,7 +581,7 @@ def save_audio_segment(
         sr = 16000
         start_sample = int(start_t * sr)
         end_sample = int(end_t * sr)
-        
+
         # 边界保护
         start_sample = max(0, start_sample)
         end_sample = min(len(audio_data), end_sample)
@@ -569,14 +590,13 @@ def save_audio_segment(
 
         # 保存为 WAV 文件
         audio_out_path = os.path.join(
-            audio_dir,
-            f"{opt.reference}_speaker{speaker_id}_pid{pid}_seg{idx}.wav"
+            audio_dir, f"{opt.reference}_speaker{speaker_id}_pid{pid}_seg{idx}.wav"
         )
         sf.write(audio_out_path, segment_audio, sr)
         print(f"Saved audio segment to {audio_out_path}")
         # 可选：将音频路径也写入 best_entry 或 CSV
         entry["audio_segment_path"] = audio_out_path
-        
+
 
 def visualize(
     vid_path,
@@ -700,7 +720,6 @@ def visualize(
 #     return final_path
 
 
-
 def visualize_tracks(
     video_reader,
     person_bbox_dict,
@@ -817,7 +836,7 @@ class Worker:
             model_config_path=GROUNDING_DINO_CONFIG,
             model_checkpoint_path=GROUNDING_DINO_CHECKPOINT,
             device="cuda",
-        )   
+        )
         # model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
         model_cfg = "sam2.1_hiera_l.yaml"
         sam2_checkpoint = "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/checkpoints/sam2.1_hiera_large.pt"
@@ -894,7 +913,7 @@ class Worker:
         if len(parts) <= 1:
             rel_subdir = ""
         else:
-            clean_parts = [p for p in parts if p] 
+            clean_parts = [p for p in parts if p]
             rel_subdir = os.path.join(*clean_parts[-depth:]) if clean_parts else ""
 
         save_folder = os.path.join(output_dir, rel_subdir)
@@ -918,7 +937,7 @@ class Worker:
     def first_step(self, vid_path):
         separation_data = run_one(vid_path, self.model, opt, self.config, self.device)
         # final_files = self.save_and_enhance_results(separation_data, opt.store_dir)
-        saved_files = self.save_results(separation_data, opt.store_dir,depth=2)
+        saved_files = self.save_results(separation_data, opt.store_dir, depth=2)
         print(saved_files, "saved_filessaved_filessaved_files")
         for sep_file in saved_files:
             output_wav, file_name = SE(sep_file, self.myClearVoice)
@@ -1004,6 +1023,7 @@ class Worker:
                 return None
 
         return mouth_movements
+
     """
     1. 加载视频 → 2. 人脸检测与跟踪（SAM2） → 3. 音频说话人分割 →
     4. 遍历每个说话人片段 → 5. 遍历所有人脸 track →
@@ -1011,6 +1031,7 @@ class Worker:
     8. 选置信度最高的 track 作为该说话人 →
     9. 输出 mask/pose/可视化/CSV
     """
+
     def second_step(
         self,
         video_path,
@@ -1041,8 +1062,8 @@ class Worker:
             BOX_THRESHOLD,
         )
 
-        print(person_bbox_dict,"person_bbox_dictperson_bbox_dictperson_bbox_dict")
-        print(bbox_mask,"bbox_maskbbox_mask")
+        print(person_bbox_dict, "person_bbox_dictperson_bbox_dictperson_bbox_dict")
+        print(bbox_mask, "bbox_maskbbox_mask")
 
         all_person_ids = set()
         for frame_data in person_bbox_dict.values():
@@ -1061,8 +1082,8 @@ class Worker:
         audio_path = file_name
         audio_data, sample_rate = librosa.load(audio_path, sr=16000)
         process_audio = process_audio_files(audio_path, pipeline)
-        
-        print(process_audio,"process_audioprocess_audioprocess_audioprocess_audio")
+
+        print(process_audio, "process_audioprocess_audioprocess_audioprocess_audio")
 
         time_speaker = process_audio["time_speaker"]
         all_speaker_data = []
@@ -1139,12 +1160,14 @@ class Worker:
             if masks_in_range:
                 valid = True
                 all_speaker_data.append(best_entry)
-                
+
         if valid:
             # 保存说话人音频片段
-            speaker_audio_paths=gen_audio_by_speakerID(audio_data=audio_data,all_speaker_data=all_speaker_data)
-            
-            #按照speaker_id 分组 all_speaker_data 
+            speaker_audio_paths = gen_audio_by_speakerID(
+                audio_data=audio_data, all_speaker_data=all_speaker_data
+            )
+
+            # 按照speaker_id 分组 all_speaker_data
             speaker_entries = defaultdict(list)
             for entry in all_speaker_data:
                 speaker_entries[entry["speaker_id"]].append(entry)
@@ -1152,16 +1175,16 @@ class Worker:
             os.makedirs(jdir, exist_ok=True)
             mask_j = os.path.join(jdir, f"{opt.reference}_mask.jsonl")
             pose_j = os.path.join(jdir, f"{opt.reference}_landmarks.jsonl")
-            
+
             total_frames = len(vr)
             fps = getattr(opt, "frame_rate", vr.get_avg_fps())
             speaker_output_paths = {}
-            
+
             for spk_id, entries in speaker_entries.items():
                 # 聚合该 speaker 的 mask 和 pose
                 mask_per_frame = {}
                 pose_per_frame = {}
-                
+
                 for rec in entries:
                     for f, r in rec["mask"].items():
                         cnt = r["counts"]
@@ -1170,20 +1193,34 @@ class Worker:
                         mask_per_frame[f] = {"size": r["size"], "counts": cnt}
                     for f, pts in rec["poses"].items():
                         pose_per_frame[f] = pts
-                
-                mask_j = os.path.join(jdir, f"{opt.reference}_mask_speaker_{spk_id}.jsonl")
-                pose_j = os.path.join(jdir, f"{opt.reference}_landmarks_speaker_{spk_id}.jsonl")  
 
-                with open(mask_j, "w", encoding="utf-8") as mf, open(pose_j, "w", encoding="utf-8") as pf:
+                mask_j = os.path.join(
+                    jdir, f"{opt.reference}_mask_speaker_{spk_id}.jsonl"
+                )
+                pose_j = os.path.join(
+                    jdir, f"{opt.reference}_landmarks_speaker_{spk_id}.jsonl"
+                )
+
+                with open(mask_j, "w", encoding="utf-8") as mf, open(
+                    pose_j, "w", encoding="utf-8"
+                ) as pf:
                     for f in range(total_frames):
-                        mf.write(f"{f}:" + json.dumps(mask_per_frame.get(f), ensure_ascii=False) + "\n")
-                        pf.write(f"{f}:" + json.dumps(pose_per_frame.get(f), ensure_ascii=False) + "\n")
+                        mf.write(
+                            f"{f}:"
+                            + json.dumps(mask_per_frame.get(f), ensure_ascii=False)
+                            + "\n"
+                        )
+                        pf.write(
+                            f"{f}:"
+                            + json.dumps(pose_per_frame.get(f), ensure_ascii=False)
+                            + "\n"
+                        )
 
                 speaker_output_paths[spk_id] = {
                     "mask_jsonl": mask_j,
-                    "pose_jsonl": pose_j
+                    "pose_jsonl": pose_j,
                 }
-        
+
             vis_dir = os.path.join(opt.saved_vid_root, "visualization")
             os.makedirs(vis_dir, exist_ok=True)
             vis_path = os.path.join(vis_dir, f"{opt.reference}_vis.mp4")
@@ -1215,12 +1252,23 @@ class Worker:
                         ]
                     )
                 writer.writerow(
-                    [audio_path, spk_id, total_frames, mask_j, pose_j, speaker_audio_paths, video_path, vis_path]
+                    [
+                        audio_path,
+                        spk_id,
+                        total_frames,
+                        mask_j,
+                        pose_j,
+                        speaker_audio_paths,
+                        video_path,
+                        vis_path,
+                    ]
                 )
             print(f"Results written to {opt.output_csv_path}")
 
         else:
-            print("$$$$$$$$$$$$$$$$$$$$ No valid speaking segments found, skipping result saving.$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
+            print(
+                "$$$$$$$$$$$$$$$$$$$$ No valid speaking segments found, skipping result saving.$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$"
+            )
             # os.remove(audio_path)
             # failed_dir = os.path.join(
             #     opt.saved_vid_root, "failed_videos_tvshow_batch-1"
@@ -1366,7 +1414,7 @@ if __name__ == "__main__":
                             "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/Music-Source-Separation-Training",
                             "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/syncnet_python-master",
                             "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt",
-                            "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/sam2_opt"
+                            "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/sam2_opt",
                             # "/home/ubuntu/Grounded-SAM-2",
                             # "/home/ubuntu/Grounded-SAM-2/grounding_dino",
                             # "/home/ubuntu/MyFiles/haoran/code",
