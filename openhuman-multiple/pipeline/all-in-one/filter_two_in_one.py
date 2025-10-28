@@ -27,6 +27,8 @@ import soundfile as sf
 from decord import VideoReader, cpu
 import shlex
 from collections import defaultdict
+from moviepy.editor import VideoFileClip, AudioFileClip
+
 
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 sys.path.insert(0, "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/mmpose-main")
@@ -1130,6 +1132,8 @@ class Worker:
                 # print(track_poses,"track_posestrack_posestrack_poses")
                 # track_audio = extract_track_audio(audio_data, [start_time, end_time], opt.frame_rate)
                 track_audio = extract_audio_by_track(audio_data, frame_idx)
+                if len(vidtracks) == 0 or len(track_audio) == 0:
+                    continue
                 offset, conf, dist = self.syncnet.evaluate(vidtracks, track_audio)
                 # 判断syncnet结果
                 print(conf, "confcconfcconfconf")
@@ -1162,6 +1166,26 @@ class Worker:
                 all_speaker_data.append(best_entry)
 
         if valid:
+            # 保证说话人至少大于25帧
+            filtered_speaker_data = [
+                entry
+                for entry in all_speaker_data
+                if len(entry["mask"]) >= 25 and len(entry["poses"]) >= 25
+            ]
+            speaker_groups = defaultdict(list)
+            for entry in filtered_speaker_data:
+                speaker_groups[entry["speaker_id"]].append(entry)
+
+            valid_speakers = {}
+            for spk_id, entries in speaker_groups.items():
+                if entries:
+                    valid_speakers[spk_id] = entries[0]
+
+            if len(valid_speakers) < 2:
+                return
+
+            all_speaker_data = list(valid_speakers.values())
+
             # 保存说话人音频片段
             speaker_audio_paths = gen_audio_by_speakerID(
                 audio_data=audio_data, all_speaker_data=all_speaker_data
@@ -1223,7 +1247,7 @@ class Worker:
 
             vis_dir = os.path.join(opt.saved_vid_root, "visualization")
             os.makedirs(vis_dir, exist_ok=True)
-            vis_path = os.path.join(vis_dir, f"{opt.reference}_vis.mp4")
+            vis_noaudio_path = os.path.join(vis_dir, f"{opt.reference}_visnoaudio.mp4")
             fps = getattr(opt, "frame_rate", vr.get_avg_fps())
             visualize_tracks(
                 video_reader=vr,
@@ -1232,7 +1256,28 @@ class Worker:
                 output_path=vis_path,
                 fps=fps,
             )
-            # visualize_tracks_with_audio(vr,person_bbox_dict,all_speaker_data,vis_path,fps,video_path)
+
+            # 合并原始音频（假设 video_path 包含音频）
+            vis_path = os.path.join(vis_dir, f"{opt.reference}_vis.mp4")
+            try:
+                video_clip = VideoFileClip(vis_noaudio_path)
+                audio_clip = AudioFileClip(video_path)
+                final_clip = video_clip.set_audio(audio_clip)
+                final_clip.write_videofile(
+                    vis_path,
+                    codec="libx264",
+                    audio_codec="aac",
+                    temp_audiofile="tmp-audio.m4a",
+                    remove_temp=True,
+                    logger=None,
+                )
+                video_clip.close()
+                audio_clip.close()
+                os.remove(vis_noaudio_path)
+            except Exception as e:
+                print(f"Failed to add audio to visualization: {e}")
+                vis_path = vis_noaudio_path
+
             print(f"Visualization saved to {vis_path}")
 
             # 汇总
@@ -1428,8 +1473,8 @@ if __name__ == "__main__":
         samples = ray.data.read_csv(opt.input_csv_path)
         predictions = samples.map_batches(
             Worker,
-            num_gpus=1,
+            num_gpus=0.5,
             batch_size=1,
-            concurrency=23,
+            concurrency=2,
         )
         predictions.write_csv(opt.ray_log_dir)

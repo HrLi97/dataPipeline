@@ -16,10 +16,10 @@ import pandas as pd
 import torch
 
 parser = argparse.ArgumentParser(description='分离GPU推理与CPU可视化的姿态估计流水线')
-parser.add_argument("--save_path", default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/zy_lmks/openhunman-1/part2/",help="可视化结果保存路径")
-parser.add_argument("--keypoint_path", default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/zy_lmks/openhunman-1/part2/",help="关键点数据保存路径")
+parser.add_argument("--save_path", default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/zy_lmks/openhunman-1/part9/",help="可视化结果保存路径")
+parser.add_argument("--keypoint_path", default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/zy_lmks/openhunman-1/part9/",help="关键点数据保存路径")
 parser.add_argument('--model_arch', default='wholebody', help="模型架构名称")
-parser.add_argument('--csv_path', default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/fps/open_part/0919_openhuman_one_human_all_25fps_part_2.csv",help="包含视频路径的CSV文件")
+parser.add_argument('--csv_path', default="/mnt/cfs/shanhai/lihaoran/Data_process/pipeline_for_openhuman/tmp/fps/open_part/0919_openhuman_one_human_all_25fps_part_9.csv",help="包含视频路径的CSV文件")
 opt = parser.parse_args()
 
 def read_vid_paths(csv_file):
