@@ -1,16 +1,12 @@
 # -- coding: utf-8 --
 import json
 import logging
-import math
 import os
-import re
 import subprocess
-import time
 import cv2
 import mmcv
 import ray
 import sys
-from scipy import signal
 import torch
 import numpy as np
 import supervision as sv
@@ -20,7 +16,6 @@ from tqdm import tqdm
 from PIL import Image
 import csv
 import librosa
-import shutil
 from accelerate import PartialState
 import ffmpeg
 import soundfile as sf
@@ -28,7 +23,8 @@ from decord import VideoReader, cpu
 import shlex
 from collections import defaultdict
 from moviepy.editor import VideoFileClip, AudioFileClip
-
+import tempfile
+from pydub import AudioSegment
 
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 sys.path.insert(0, "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/mmpose-main")
@@ -36,12 +32,6 @@ sys.path.insert(
     0, "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/Music-Source-Separation-Training"
 )
 sys.path.insert(0, "/mnt/cfs/shanhai/lihaoran/Data_process/a6000/syncnet_python-master")
-
-# sys.path.insert(0, "/home/ubuntu/Grounded-SAM-2")
-# sys.path.insert(0, "/home/ubuntu/MyFiles/haoran/code/")
-# sys.path.insert(0, "/home/ubuntu/MyFiles/haoran/code/Data_process_talking")
-# sys.path.insert(0, "/home/ubuntu/Grounded-SAM-2/grounding_dino")
-
 sys.path.append("/mnt/cfs/shanhai/lihaoran/Data_process/a6000")
 sys.path.append(
     "/mnt/cfs/shanhai/lihaoran/Data_process/dataPipeline/third_part/Grounded_SAM2_opt/"
@@ -78,6 +68,8 @@ BOX_THRESHOLD_HAND = 0.35
 BOX_THRESHOLD = 0.45
 TEXT_THRESHOLD = 0.4
 PERSON_CONFIDENCE = 0.5
+
+MAX_FRAME_PER_PERSON = 10
 import pycocotools.mask as mask_util
 import pandas as pd
 from rtmlib import Wholebody, draw_skeleton, PoseTracker
@@ -333,68 +325,121 @@ def calculate_IOU(box1, box2):
     return intersection / union if union > 0 else 0
 
 
+def extract_audio_from_video(video_path, sr=16000):
+    """从视频中提取单声道 WAV 音频"""
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_audio:
+        tmp_path = tmp_audio.name
+    try:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            video_path,
+            "-vn",  # 只提取音频
+            "-acodec",
+            "pcm_s16le",  # 强制 PCM 编码
+            "-ar",
+            str(sr),
+            "-ac",
+            "1",
+            "-f",
+            "wav",
+            "-loglevel",
+            "quiet",
+            tmp_path,
+        ]
+        subprocess.run(cmd, check=True)
+        audio_data, _ = librosa.load(tmp_path, sr=sr)
+        return audio_data
+    except subprocess.CalledProcessError as e:
+        print(f"FFmpeg failed with code {e.returncode}")
+        return None
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 def run_one(path, model, opt, config, device, verbose=False):
-    instruments = config.training.instruments.copy()
-    if config.training.target_instrument is not None:
-        instruments = [config.training.target_instrument]
+    # 如果是视频文件（如 .mp4），先提取音频
+    if path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_audio:
+            tmp_path = tmp_audio.name
+        try:
+            # 使用 pydub + ffmpeg 提取音频（自动调用系统 ffmpeg）
+            audio = AudioSegment.from_file(path)
+            audio.export(tmp_path, format='wav')
+            audio_path = tmp_path
+        except Exception as e:
+            os.unlink(tmp_path)
+            raise RuntimeError(f"无法从视频 {path} 提取音频: {e}")
+    else:
+        audio_path = path  # 已是音频文件
 
-    mix, sr = librosa.load(path, sr=44100, mono=False)
-    if len(mix.shape) == 1:
-        mix = np.stack([mix, mix], axis=0)
+    try:
+        instruments = config.training.instruments.copy()
+        if config.training.target_instrument is not None:
+            instruments = [config.training.target_instrument]
 
-    mix_orig = mix.copy()
-    if config.inference.get("normalize", False):
-        mono = mix.mean(0)
-        mean = mono.mean()
-        std = mono.std()
-        mix = (mix - mean) / std
+        mix, sr = librosa.load(audio_path, sr=44100, mono=False)
+        if len(mix.shape) == 1:
+            mix = np.stack([mix, mix], axis=0)
 
-    track_proc_list = [mix.copy()]
-    if opt.use_tta:
-        track_proc_list.extend([mix[::-1].copy(), -1.0 * mix.copy()])
+        mix_orig = mix.copy()
+        if config.inference.get("normalize", False):
+            mono = mix.mean(0)
+            mean = mono.mean()
+            std = mono.std()
+            mix = (mix - mean) / std
 
-    full_result = []
-    for mix in track_proc_list:
-        waveforms = demix(
-            config,
-            model,
-            mix,
-            device,
-            pbar=not opt.disable_detailed_pbar,
-            model_type="mel_band_roformer",
-        )
-        full_result.append(waveforms)
+        track_proc_list = [mix.copy()]
+        if opt.use_tta:
+            track_proc_list.extend([mix[::-1].copy(), -1.0 * mix.copy()])
 
-    waveforms = full_result[0]
-    for i in range(1, len(full_result)):
-        d = full_result[i]
-        for el in d:
-            if i == 2:
-                waveforms[el] += -1.0 * d[el]
-            elif i == 1:
-                waveforms[el] += d[el][::-1].copy()
-            else:
-                waveforms[el] += d[el]
-    for el in waveforms:
-        waveforms[el] /= len(full_result)
+        full_result = []
+        for mix in track_proc_list:
+            waveforms = demix(
+                config,
+                model,
+                mix,
+                device,
+                pbar=not opt.disable_detailed_pbar,
+                model_type="mel_band_roformer",
+            )
+            full_result.append(waveforms)
 
-    # if opt.extract_instrumental:
-    #     instr = 'vocals' if 'vocals' in instruments else instruments[0]
-    #     instruments.append('instrumental')
-    #     waveforms['instrumental'] = mix_orig - waveforms[instr]
+        waveforms = full_result[0]
+        for i in range(1, len(full_result)):
+            d = full_result[i]
+            for el in d:
+                if i == 2:
+                    waveforms[el] += -1.0 * d[el]
+                elif i == 1:
+                    waveforms[el] += d[el][::-1].copy()
+                else:
+                    waveforms[el] += d[el]
+        for el in waveforms:
+            waveforms[el] /= len(full_result)
 
-    save_data = {
-        "waveforms": waveforms,
-        "sr": sr,
-        "mix_orig": mix_orig,
-        "instruments": instruments,
-        "vid_path": path,
-        "normalize_params": (
-            (mean, std) if config.inference.get("normalize", False) else None
-        ),
-    }
-    return save_data
+        save_data = {
+            "waveforms": waveforms,
+            "sr": sr,
+            "mix_orig": mix_orig,
+            "instruments": instruments,
+            "vid_path": path,
+            "normalize_params": (
+                (mean, std) if config.inference.get("normalize", False) else None
+            ),
+        }
+        return save_data
 
+    finally:
+        # 清理临时文件（如果是从视频提取的）
+        if path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+            
 
 def inference_faces(DET, frames):
     dets = []
@@ -465,9 +510,10 @@ def process_item_person_2(
     fps = vr.get_avg_fps()
     out_width, out_height = vr[0].shape[1], vr[0].shape[0]
 
+    sample_frames = list(range(0, len(vr), 5))
+    two_person_count = 0
     person_num = 0
-    valid_two_person = True
-    for frame_idx in range(0, len(vr), 5):
+    for frame_idx in sample_frames:
         frame_np = vr[frame_idx].numpy()
         boxes, confs, labels = predict(
             model=grounding_model,
@@ -476,15 +522,14 @@ def process_item_person_2(
             box_threshold=BOX_THRESHOLD_1,
             text_threshold=TEXT_THRESHOLD,
         )
-        person_num = max(person_num, len(boxes))
+        person_num = len(boxes)
+        if person_num == 2:
+            two_person_count += 1
 
-        if person_num != 2:
-            valid_two_person = False
-            break
+    total_samples = len(sample_frames)
+    two_person_ratio = two_person_count / total_samples if total_samples > 0 else 0.0
 
-    print(person_num, "person_numperson_numperson_num")
-
-    if not valid_two_person:
+    if two_person_ratio < 0.9:
         return bbox_dict, mask_dict, video_segments, OBJECTS
 
     for frame_idx in range(0, len(vr), 5):
@@ -935,7 +980,7 @@ class Worker:
             results.append(output_file)
 
         return results
-
+    
     def first_step(self, vid_path):
         separation_data = run_one(vid_path, self.model, opt, self.config, self.device)
         # final_files = self.save_and_enhance_results(separation_data, opt.store_dir)
@@ -1064,9 +1109,6 @@ class Worker:
             BOX_THRESHOLD,
         )
 
-        print(person_bbox_dict, "person_bbox_dictperson_bbox_dictperson_bbox_dict")
-        print(bbox_mask, "bbox_maskbbox_mask")
-
         all_person_ids = set()
         for frame_data in person_bbox_dict.values():
             all_person_ids.update(frame_data.keys())
@@ -1112,10 +1154,17 @@ class Worker:
                     face_crop = frame_full[y1:y2, x1:x2]
                     if face_crop.size == 0:
                         continue
-                    keypoints, scores = pose_model(face_crop)
+                    # keypoints, scores = pose_model(face_crop)
+                    pose_result = pose_model(face_crop)
+                    if pose_result is None:
+                        continue
+                    keypoints, scores = pose_result
+                    if keypoints is None or scores is None:
+                        continue
                     # 兼容 (68,2) 或 (1,68,2) 输出
                     kpts = keypoints[0] if keypoints.ndim == 3 else keypoints
                     scs = scores[0] if scores.ndim == 2 else scores
+                    
                     abs_kps = []
                     for kp in kpts:
                         xr, yr = kp[0], kp[1]
@@ -1166,32 +1215,41 @@ class Worker:
                 all_speaker_data.append(best_entry)
 
         if valid:
-            # 保证说话人至少大于25帧
+            # 保证说话人至少大于10帧
             filtered_speaker_data = [
                 entry
                 for entry in all_speaker_data
-                if len(entry["mask"]) >= 25 and len(entry["poses"]) >= 25
+                if len(entry["mask"]) >= MAX_FRAME_PER_PERSON
+                and len(entry["poses"]) >= MAX_FRAME_PER_PERSON
             ]
             speaker_groups = defaultdict(list)
             for entry in filtered_speaker_data:
                 speaker_groups[entry["speaker_id"]].append(entry)
-
-            valid_speakers = {}
-            for spk_id, entries in speaker_groups.items():
-                if entries:
-                    valid_speakers[spk_id] = entries[0]
-
-            if len(valid_speakers) < 2:
+                
+            print(len(best_entry["mask"]), len(best_entry["poses"]))
+            print(f"\n{'='*60}\nProcessing video: {video_path}\n{'='*60}")
+            print(f"Total raw speaker entries: {len(all_speaker_data)}")
+            print(
+                f"After frame-length filter (≥{MAX_FRAME_PER_PERSON}): {len(filtered_speaker_data)}"
+            )
+            for entry in filtered_speaker_data:
+                print(
+                    f"  spk={entry['speaker_id']}, pid={entry['pid']}, mask_frames={len(entry['mask'])}, pose_frames={len(entry['poses'])}, conf={entry['conf']:.3f}"
+                )
+                
+            unique_speakers = set(entry["speaker_id"] for entry in filtered_speaker_data)
+            if len(unique_speakers) < 2:
+                logging.info(f"Fewer than 2 unique speakers: {unique_speakers}")
                 return
 
-            all_speaker_data = list(valid_speakers.values())
+            all_speaker_data = filtered_speaker_data
 
             # 保存说话人音频片段
             speaker_audio_paths = gen_audio_by_speakerID(
                 audio_data=audio_data, all_speaker_data=all_speaker_data
             )
 
-            # 按照speaker_id 分组 all_speaker_data
+            # 按照speaker_id 分组 all_speaker_dataƒ
             speaker_entries = defaultdict(list)
             for entry in all_speaker_data:
                 speaker_entries[entry["speaker_id"]].append(entry)
@@ -1249,6 +1307,7 @@ class Worker:
             os.makedirs(vis_dir, exist_ok=True)
             vis_noaudio_path = os.path.join(vis_dir, f"{opt.reference}_visnoaudio.mp4")
             fps = getattr(opt, "frame_rate", vr.get_avg_fps())
+            vis_path = os.path.join(vis_dir, f"{opt.reference}_vis.mp4")
             visualize_tracks(
                 video_reader=vr,
                 person_bbox_dict=person_bbox_dict,
@@ -1256,9 +1315,7 @@ class Worker:
                 output_path=vis_path,
                 fps=fps,
             )
-
             # 合并原始音频（假设 video_path 包含音频）
-            vis_path = os.path.join(vis_dir, f"{opt.reference}_vis.mp4")
             try:
                 video_clip = VideoFileClip(vis_noaudio_path)
                 audio_clip = AudioFileClip(video_path)
@@ -1332,25 +1389,25 @@ class Worker:
         else:
             vid_path = item["path"][0]
 
-        # try:
-        output_wav, file_name = self.first_step(vid_path)
-        print(output_wav, "output_wavoutput_wavoutput_wav")
-        self.second_step(
-            vid_path,
-            output_wav,
-            file_name,
-            opt,
-            self.grounding_model,
-            self.image_predictor,
-            self.video_predictor,
-            self.pipeline,
-            self.pose_model,
-        )
-        item["status"] = [1]
-        # except Exception as e:
-        #     print(f"!!!!!!!!! Error process {vid_path}")
-        #     print("Reason:", e)
-        #     item["status"] = [0]
+        try:
+            output_wav, file_name = self.first_step(vid_path)
+            print(output_wav, "output_wavoutput_wavoutput_wav")
+            self.second_step(
+                vid_path,
+                output_wav,
+                file_name,
+                opt,
+                self.grounding_model,
+                self.image_predictor,
+                self.video_predictor,
+                self.pipeline,
+                self.pose_model,
+            )
+            item["status"] = [1]
+        except Exception as e:
+            print(f"!!!!!!!!! Error process {vid_path}")
+            print("Reason:", e)
+            item["status"] = [0]
         return item
 
 
@@ -1408,7 +1465,7 @@ parser.add_argument("--use_tta", action="store_true")
 parser.add_argument("--frame_rate", type=int, default=25, help="")
 parser.add_argument("--batch_size", type=int, default=1, help="")
 parser.add_argument("--vshift", type=int, default=10, help="")
-parser.add_argument("--is_local", type=bool, default=False)
+parser.add_argument("--is_local", type=bool, default=True)
 parser.add_argument(
     "--num_failed_det",
     type=int,
@@ -1426,13 +1483,19 @@ parser.add_argument(
 opt = parser.parse_args()
 
 if __name__ == "__main__":
-    os.makedirs(os.path.dirname(opt.log_path), exist_ok=True, mode=0o777)
+
+    print("=== Entering main ===")
+    print("log_path:", opt.log_path)
+    print("is_local:", opt.is_local)
+
+    os.makedirs(os.path.dirname(opt.log_path), exist_ok=True)
     logging.basicConfig(
         filename=opt.log_path,
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
-    os.makedirs(os.path.dirname(opt.ray_log_dir), exist_ok=True, mode=0o777)
+    logging.info("🚀 Pipeline started with log_path: %s", opt.log_path)
+    os.makedirs(os.path.dirname(opt.ray_log_dir), exist_ok=True)
 
     if opt.is_local:
         samples = list(
